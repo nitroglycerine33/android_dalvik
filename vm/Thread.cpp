@@ -1301,8 +1301,8 @@ bool dvmCreateInterpThread(Object* threadObj, int reqStackSize)
 
     ThreadStatus oldStatus = dvmChangeStatus(self, THREAD_VMWAIT);
     pthread_t threadHandle;
-    int cc = pthread_create(&threadHandle, &threadAttr, interpThreadStart,
-                            newThread);
+    int cc = pthread_create(&threadHandle, &threadAttr, interpThreadStart, newThread);
+    pthread_attr_destroy(&threadAttr);
     dvmChangeStatus(self, oldStatus);
 
     if (cc != 0) {
@@ -1636,7 +1636,6 @@ bool dvmCreateInternalThread(pthread_t* pHandle, const char* name,
 {
     InternalStartArgs* pArgs;
     Object* systemGroup;
-    pthread_attr_t threadAttr;
     volatile Thread* newThread = NULL;
     volatile int createStatus = 0;
 
@@ -1653,12 +1652,12 @@ bool dvmCreateInternalThread(pthread_t* pHandle, const char* name,
     pArgs->pThread = &newThread;
     pArgs->pCreateStatus = &createStatus;
 
+    pthread_attr_t threadAttr;
     pthread_attr_init(&threadAttr);
-    //pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_DETACHED);
 
-    if (pthread_create(pHandle, &threadAttr, internalThreadStart,
-            pArgs) != 0)
-    {
+    int cc = pthread_create(pHandle, &threadAttr, internalThreadStart, pArgs);
+    pthread_attr_destroy(&threadAttr);
+    if (cc != 0) {
         ALOGE("internal thread creation failed");
         free(pArgs->name);
         free(pArgs);
@@ -2153,6 +2152,10 @@ void dvmDetachCurrentThread()
             // cond var guarded by threadListLock, which we already hold
             cc = pthread_cond_signal(&gDvm.vmExitCond);
             assert(cc == 0);
+#ifdef NDEBUG
+            // not used -> variable defined but not used warning
+            (void)cc;
+#endif
         }
     }
 
@@ -2710,6 +2713,10 @@ void dvmResumeAllThreads(SuspendCause why)
     lockThreadSuspendCount();
     cc = pthread_cond_broadcast(&gDvm.threadSuspendCountCond);
     assert(cc == 0);
+#ifdef NDEBUG
+    // not used -> variable defined but not used warning
+    (void)cc;
+#endif
     unlockThreadSuspendCount();
 
     LOG_THREAD("threadid=%d: ResumeAll complete", self->threadId);
@@ -2759,6 +2766,10 @@ void dvmUndoDebuggerSuspensions()
     lockThreadSuspendCount();
     cc = pthread_cond_broadcast(&gDvm.threadSuspendCountCond);
     assert(cc == 0);
+#ifdef NDEBUG
+    // not used -> variable defined but not used warning
+    (void)cc;
+#endif
     unlockThreadSuspendCount();
 
     unlockThreadSuspend();
@@ -3266,6 +3277,26 @@ static void getSchedulerStats(SchedulerStats* stats, pid_t tid) {
     }
 }
 
+static bool shouldShowNativeStack(Thread* thread) {
+    // In native code somewhere in the VM? That's interesting.
+    if (thread->status == THREAD_VMWAIT) {
+        return true;
+    }
+
+    // In an Object.wait variant? That's not interesting.
+    if (thread->status == THREAD_TIMED_WAIT || thread->status == THREAD_WAIT) {
+        return false;
+    }
+
+    // In some other native method? That's interesting.
+    // We don't just check THREAD_NATIVE because native methods will be in
+    // state THREAD_SUSPENDED if they're calling back into the VM, or THREAD_MONITOR
+    // if they're blocked on a monitor, or one of the thread-startup states if
+    // it's early enough in their life cycle (http://b/7432159).
+    const Method* currentMethod = SAVEAREA_FROM_FP(thread->interpSave.curFrame)->method;
+    return dvmIsNativeMethod(currentMethod);
+}
+
 /*
  * Print information about the specified thread.
  *
@@ -3344,16 +3375,7 @@ void dvmDumpThreadEx(const DebugOutputTarget* target, Thread* thread,
 
     dumpSchedStat(target, thread->systemTid);
 
-    /*
-     * Grab the native stack, if possible.
-     *
-     * The native thread is still running, even if the Dalvik side is
-     * suspended.  This means the thread can move itself out of NATIVE state
-     * while we're in here, shifting to SUSPENDED after a brief moment at
-     * RUNNING.  At that point the native stack isn't all that interesting,
-     * though, so if we fail to dump it there's little lost.
-     */
-    if (thread->status == THREAD_NATIVE || thread->status == THREAD_VMWAIT) {
+    if (shouldShowNativeStack(thread)) {
         dvmDumpNativeStack(target, thread->systemTid);
     }
 

@@ -142,6 +142,9 @@ bool dvmCompilerWorkEnqueue(const u2 *pc, WorkOrderKind kind, void* info)
     gDvmJit.compilerQueueLength++;
     cc = pthread_cond_signal(&gDvmJit.compilerQueueActivity);
     assert(cc == 0);
+#ifdef NDEBUG
+    (void)cc; // prevent error on -Werror
+#endif
 
     dvmUnlockMutex(&gDvmJit.compilerLock);
     return result;
@@ -448,7 +451,7 @@ static bool compilerThreadStartup(void)
     pJitProfTable = (unsigned char *)malloc(JIT_PROF_SIZE);
     if (!pJitProfTable) {
         ALOGE("jit prof table allocation failed");
-        free(pJitProfTable);
+        free(pJitTable);
         dvmUnlockMutex(&gDvmJit.tableLock);
         goto fail;
     }
@@ -464,6 +467,8 @@ static bool compilerThreadStartup(void)
                              calloc(1, sizeof(*pJitTraceProfCounters));
     if (!pJitTraceProfCounters) {
         ALOGE("jit trace prof counters allocation failed");
+        free(pJitTable);
+        free(pJitProfTable);
         dvmUnlockMutex(&gDvmJit.tableLock);
         goto fail;
     }
@@ -656,6 +661,9 @@ static void *compilerThreadStart(void *arg)
             int cc;
             cc = pthread_cond_signal(&gDvmJit.compilerQueueEmpty);
             assert(cc == 0);
+#ifdef NDEBUG
+            (void)cc; // prevent bug on -Werror
+#endif
             pthread_cond_wait(&gDvmJit.compilerQueueActivity,
                               &gDvmJit.compilerLock);
             continue;
